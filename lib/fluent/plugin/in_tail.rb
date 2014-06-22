@@ -31,6 +31,8 @@ module Fluent
     config_param :pos_file, :string, :default => nil
     config_param :read_from_head, :bool, :default => false
     config_param :refresh_interval, :time, :default => 60
+    config_param :flush_multiline_interval, :time, :default => 5
+    config_param :flush_multiline_wait, :time, :default => nil
 
     attr_reader :paths
 
@@ -85,10 +87,15 @@ module Fluent
 
       @refresh_trigger = TailWatcher::TimerWatcher.new(@refresh_interval, true, log, &method(:refresh_watchers))
       @refresh_trigger.attach(@loop)
+      if @multiline_mode && @flush_multiline_wait
+        @flush_multiline_trigger = TailWatcher::TimerWatcher.new(@flush_multiline_interval, true, log, &method(:flush_multiline_watchers))
+        @flush_multiline_trigger.attach(@loop)
+      end
       @thread = Thread.new(&method(:run))
     end
 
     def shutdown
+      @flush_multiline_trigger.detach if @flush_multiline_trigger && @flush_multiline_trigger.attached?
       @refresh_trigger.detach if @refresh_trigger && @refresh_trigger.attached?
 
       stop_watchers(@tails.keys, true)
@@ -205,7 +212,18 @@ module Fluent
             log.warn "got incomplete line at shutdown from #{tw.path}: #{lb.inspect}"
           end
         }
+        tw.line_buffer = nil
+        tw.last_buffered_time = nil
       end
+    end
+
+    def flush_multiline_watchers
+      now = Time.now
+      @tails.each_value { |tw|
+        if last = tw.last_buffered_time
+          flush_buffer(tw) if now - last >= @flush_multiline_wait
+        end
+      }
     end
 
     def run
@@ -274,18 +292,19 @@ module Fluent
           end
         }
       else
-        lb ||= ''
         lines.each do |line|
+          lb ||= ''
           lb << line
           @parser.parse(lb) { |time, record|
             if time && record
               convert_line_to_event(lb, es)
-              lb = ''
+              lb = nil
             end
           }
         end
       end
       tail_watcher.line_buffer = lb
+      tail_watcher.last_buffered_time = Time.now
       es
     end
 
@@ -308,6 +327,7 @@ module Fluent
 
       attr_reader :path
       attr_accessor :line_buffer
+      attr_accessor :last_buffered_time
       attr_accessor :unwatched  # This is used for removing position entry from PositionFile
 
       def tag

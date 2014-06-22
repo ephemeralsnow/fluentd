@@ -363,6 +363,101 @@ class TailInputTest < Test::Unit::TestCase
     assert_equal({"var1" => "foo 2", "var2" => "bar 2", "var3" => "baz 2"}, emits[1][2])
   end
 
+  def test_multiline_flush_wait_with_firstline
+    File.open("#{TMP_DIR}/tail.txt", "w") { |f| }
+
+    d = create_driver %[
+      format multiline
+      format1 /^s (?<message1>[^\\n]+)\\n?/
+      format2 /(f (?<message2>[^\\n]+)\\n?)?/
+      format3 /(f (?<message3>.*))?/
+      format_firstline /^s /
+      flush_multiline_interval 1s
+      flush_multiline_wait 1s
+    ]
+    t1, t2, t3, t4, t5 = nil
+    d.run do
+      File.open("#{TMP_DIR}/tail.txt", "a") { |f|
+        f.puts "f test1"
+        f.flush; sleep 3; t1 = Time.now
+        f.puts "s test2"
+        f.flush; sleep 3; t2 = Time.now
+        f.puts "s test3"
+        f.puts "f test4"
+        f.puts "f test5"
+        f.flush; sleep 3; t3 = Time.now
+        f.puts "f test6"
+        f.puts "s test7"
+        f.puts "f test8"
+        f.puts "s test9"
+        f.flush; sleep 3; t4 = Time.now
+        f.puts "s test10"
+        f.puts "f test11"
+        f.puts "s test12"
+        f.puts "f test13"
+        f.puts "f test14"
+        f.flush; sleep 3; t5 = Time.now
+      }
+      sleep 1
+    end
+
+    emits = d.emits
+    assert_equal(6, emits.length)
+    assert_equal({"message1" => "test2"}, emits[0][2])
+    assert_equal({"message1" => "test3", "message2" => "test4", "message3" => "test5"}, emits[1][2])
+    assert_equal({"message1" => "test7", "message2" => "test8"}, emits[2][2])
+    assert_equal({"message1" => "test9"}, emits[3][2])
+    assert_equal({"message1" => "test10", "message2" => "test11"}, emits[4][2])
+    assert_equal({"message1" => "test12", "message2" => "test13", "message3" => "test14"}, emits[5][2])
+    assert((t1.to_i..t2.to_i).include?(emits[0][1]))
+    assert((t2.to_i..t3.to_i).include?(emits[1][1]))
+    assert((t3.to_i..t4.to_i).include?(emits[2][1]))
+    assert((t3.to_i..t4.to_i).include?(emits[3][1]))
+    assert((t4.to_i..t5.to_i).include?(emits[4][1]))
+    assert((t4.to_i..t5.to_i).include?(emits[5][1]))
+  end
+
+  def test_multiline_flush_wait_without_firstline
+    File.open("#{TMP_DIR}/tail.txt", "w") { |f| }
+
+    d = create_driver %[
+      format multiline
+      format1 /(?<var1>foo \\d)\\n/
+      format2 /(?<var2>bar \\d)\\n/
+      format3 /(?<var3>baz \\d)/
+      flush_multiline_interval 1s
+      flush_multiline_wait 1s
+    ]
+    d.run do
+      File.open("#{TMP_DIR}/tail.txt", "a") { |f|
+        f.puts "foo 1"
+        f.puts "bar 1"
+        f.puts "baz 1"
+        f.puts "foo 2"
+        f.flush; sleep 3;
+        f.puts "bar 2"
+        f.puts "baz 2"
+        f.puts "foo 3"
+        f.puts "bar 3"
+        f.flush; sleep 3;
+        f.puts "baz 3"
+        f.puts "foo 4"
+        f.puts "bar 4"
+        f.puts "baz 4"
+        f.puts "foo 5"
+        f.puts "bar 5"
+        f.puts "baz 5"
+      }
+      sleep 1
+    end
+
+    emits = d.emits
+    assert_equal(3, emits.length)
+    assert_equal({"var1" => "foo 1", "var2" => "bar 1", "var3" => "baz 1"}, emits[0][2])
+    assert_equal({"var1" => "foo 4", "var2" => "bar 4", "var3" => "baz 4"}, emits[1][2])
+    assert_equal({"var1" => "foo 5", "var2" => "bar 5", "var3" => "baz 5"}, emits[2][2])
+  end
+
   # * path test
   # TODO: Clean up tests
   EX_RORATE_WAIT = 0
